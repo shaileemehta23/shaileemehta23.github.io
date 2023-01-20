@@ -1,0 +1,417 @@
+---
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = F,
+                      message = F)
+
+## Load Packages
+
+library(tidyverse)
+library(kableExtra)
+library(rpart)
+library(hrbrthemes)
+library(viridis)
+library(scales)
+library(GGally)
+```
+
+#### **Question-1: State the dataset you will use in your project. Explain what this is about.**
+
+The dataset used in this project is *properties_data.csv* and is obtained from [Kaggle](https://www.kaggle.com/datasets/dataregress/dubai-properties-dataset?datasetId=895919&amp%3Blanguage=Python); it is for the apartments in Dubai. The dataset has 1905 observations from 38 variables. This dataset contains the details of apartments in Dubai including the features of the property alongside their price and location. 
+
+
+```{r dataread, echo= FALSE}
+data = read.csv("properties_data.csv")
+```
+
+```{r}
+## overall structure of the dataset
+glimpse(data) 
+```
+
+```{r}
+## previewing the first two rows of the dataset
+head(data,2)
+```
+
+```{r}
+## previewing the last two rows of the dataset
+tail(data,2)
+```
+
+------------------------------------------------------------------------------------  
+
+*>>"Formulating a question can be a useful way to guide the exploratory data analysis process and to limit the large number of paths that can be taken with any sizeable dataset. It’s usually a good idea to spend a few minutes to figure out what is the question you’re really interested in, and narrow it down to be as specific as possible (without becoming uninteresting). One of the most important questions you can answer with an exploratory data analysis is “Do I have the right data to answer this question?” Often this question is difficult to answer at first, but can become more clear as you sort through and look at the data."*
+
+#### **Question-2: State the business question you will investigate using this dataset.**  
+My interest is to determine which are the affordable apartments in Dubai. More specifically, my business question is:
+
+> What are the determining factors of prices of apartments in Dubai?
+
+To address this business question a prediction model could be useful in estimation of the apartment prices and understanding the features included in the apartments that have an impact on its listed price. 
+
+The response variable in this case would be the $price$.
+
+------------------------------------------------------------------------------------  
+
+*>>"You should try the easy solution first. What is the simplest answer we could provide to this question? For the moment, ignore whether the answer is correct, but the point is how could you provide an initial answer or evidence for your question. You may refute that evidence later with deeper analysis, but this is the first pass."*  
+
+ 
+#### **Question-3: What could be the most simple, easiest answer to your business question? To answer this, sort your data lowest to highest in terms of your target variable and interpret the lowest row, and highest row. If you have a categorical target, create a table showing the most and least frequent categories.**
+
+I sorted the dataset using the *dplyr* displaying the features of the properties attracting the highest and the lowest prices in listings. 
+
+```{r datasort, echo= FALSE}
+## cheapest apartments
+data%>%
+  arrange(price)%>%
+  head(10)
+```
+
+```{r}
+## most expensive apartments
+data%>%
+  arrange(desc(price))%>%
+  head(10)
+```
+
+
+From the outputs above, it appears that neighborhood of the apartments relate with the prices. Apartments in the Palm Jumeirah neighborhood have a higher price listings dominating the top most expensive apartments list. Apartments at the neighborhood of International City, Dubai production City and the Dubai Silicon Oasis have low price listings. 
+
+5 or more number of bathrooms, minimum of 4 bedrooms, presence of a covered parking, concierge and Air Conditioner are some of the most common features inclusive in the properties with higher price listings. Apartments with low price listings have tone down features with only 1 to 0 number of bedrooms, 1 bathroom and novel features such as the covered parking, air conditioner and concierge being absent.
+
+Therefore, my initial answer to the question "what are the features that influence the apartment prices in Dubai?" is answered as:  
+
+> Number of bathrooms, number of bedrooms, concierge, covered parking, air conditioner and the neighborhood.
+
+#### **Question-4: State the method you plan to use to answer the business question in your project. Why?**  
+
+I plan to use **a multiple linear regression model and a model where the dependent variable was transformed using box cox method (non-linear).** The main model would be the model that performs best amongst the two. 
+
+A Linear Regression Model is suitable for this dataset because the response variable (price) is of continuous type. The explanatory variables is a mixture of numerics and character type variable which could be engineered as dummies, since they contain True or False Values.
+
+
+------------------------------------------------------------------------------------  
+
+*>>"Numerical data exploration: Summaries and tables for a single variable"*
+*For a single variable summary, the easiest summary is Five-number summary. This gives the minimum, 25th percentile, median, 75th percentile, maximum of the data and is quick check on the distribution of the data Use summary() or fivenum() functions"*  
+
+
+#### **Question-5: Pickup 10 most important numerical columns (if you have), including target variable from your dataset and get a summary for each. Comment on any NAs, irregularities, typos or outliers.** 
+
+In my dataset the relevant numerical variables are:  
+`r colnames(data[ , c(5:9)])`  
+
+The ouput below shows the results of this summary.
+
+```{r summary, echo = FALSE}
+summary(data[ , c(5:9)])
+```
+
+Based on the summary values, there are no missing values (NAs) in the dataset. The dataset appears to have no typos or any irregularities and outliers. 
+
+#### **Question-6: Pickup 5 most important categorical columns (if you have), including target variable from your dataset and get a frequency table for each. Comment on any irregularities, typos or outliers.**  
+
+Here, I selected 5 variables even though not all were entirely categorical by the could be transformed into factors for relevancy:  
+`r colnames(data[ , c(2,8,9,10,37)])`  
+
+The output below shows the results of this summary.  
+
+```{r table1, echo = FALSE}
+data%>%
+  group_by(neighborhood)%>%
+  summarise(frequency=n())%>%
+  arrange(desc(frequency))%>%
+  head(20)
+```
+
+```{r, echo = FALSE}
+data%>%
+  group_by(no_of_bedrooms)%>%
+  summarise(frequency=n())
+
+```
+
+```{r, echo = FALSE}
+data%>%
+  group_by(no_of_bathrooms)%>%
+  summarise(frequency=n())
+```
+
+```{r, echo = FALSE}
+data%>%
+  group_by(quality)%>%
+  summarise(frequency=n())
+```
+
+```{r, echo = FALSE}
+data%>%
+  group_by(view_of_water)%>%
+  summarise(frequency=n())
+```
+
+From the frequency tables it can be deduced that:
+
+1. Apartments in the neighborhood of Downtown Dubai, Dubai Marina, Jumeirah Village Circle and Palm Jumeirah appeared the most in the listings with 302, 288, 200 and 178 apartments, respectively.
+
+2. 2-bedroom apartments had the most listings followed by the 1-bedroom then 3-bedroom apartments at 729, 639 and 338 apartments respectively; suggesting that most houses sold are in this category. 5-bedroom apartments have the least listings.
+
+3. Apartments with 1, 2 and 3 bathrooms had the most listings with 311, 723 and 553 apartments respectively.
+
+4. Medimum quality apartments had the most listings at 1146 apartments, followed at a distance by the low quality apartments at 544 apartments. Apartments of Ultra quality (high-end luxurious) had the least listings at only 81 apartments.
+
+5. 1251 apartments did not have the view of water while 654 apartments were of the contrary.
+
+------------------------------------------------------------------------------------  
+
+*>>"Exploring and visualizing the data via graphics can be important at the beginning stages of data analysis to help understand basic properties of the data, to find simple patterns in data, and to suggest possible modeling strategies. The following list shows some basic charts.*  
+
+*- Boxplots : Boxplots are a visual representation of the five-number summary plus a bit more information. In particular, boxplots commonly plot outliers that go beyond the bulk of the data. This is implemented via the boxplot() function*  
+*- Barplot : Barplots are useful for visualizing categorical data, with the number of entries for each category being proportional to the height of the bar. The barplot can be made with the barplot() function.*  
+*- Histograms : Histograms show the complete empirical distribution of the data, beyond the five data points shown by the boxplots. Here, you can easily check skewness of the data, symmetry, multi-modality, and other features. The hist() function makes a histogram.*  
+*- Density plot : The density() function computes a non-parametric estimate of the distribution of a variables*
+
+#### **Question-7: Pickup 5 most important numerical columns (if you have), including target variable from your dataset and get a histogram for each. Comment on skewness of the distribution.** 
+
+In my dataset the relevant numerical variables are:  
+`r colnames(data[ , c(5:9)])` 
+
+```{r table2, echo = FALSE, fig.show='hold', out.width="50%"}
+par(mfrow = c(1, 1))
+
+hist(data$price, breaks=20,
+     main = "Histogram of Price",
+     xlab = "Price")
+hist(data$size_in_sqft, breaks=20,
+     main = "Histogram of Size in Sq Ft",
+     xlab = "Size in Sq Ft")
+hist(data$price_per_sqft, breaks=20,
+     main = "Histogram of Price per Sq Ft",
+     xlab = "Price per Sq Ft")
+hist(data$no_of_bedrooms, breaks=20,
+     main = "Histogram of Number of Bedrooms",
+     xlab = "Number of Bedrooms")
+hist(data$no_of_bathrooms, breaks=20,
+     main = "Histogram of Number of Bathrooms",
+     xlab = "Number of Bathrooms")
+```
+
+From the Histogram plots;
+
+The distribution of Price, Size in Sq Ft, Price per Sq Ft and the number of bathrooms all appear to be left skewed. The distribution of Number of Bedrooms appears to be symmetrical.
+
+#### **Question-8: Pickup 5 most important numerical columns (if you have), including target variable from your dataset and get a boxplot for each. Comment on skewness of the distribution.** 
+
+In my dataset the relevant numerical variables are:  
+`r colnames(data[ , c(5:9)])`  
+
+The charts below show the histograms.
+
+```{r histograms, echo = FALSE, fig.show='hold', out.width="50%"}
+# Price
+data%>%
+  ggplot(aes(y=price,fill="blue"))+
+  geom_boxplot()+
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=11),
+    axis.title.x=element_blank(),
+    axis.text.x=element_blank(),
+    axis.ticks.x=element_blank()
+  ) +
+  ggtitle("A boxplot of Price") +
+  xlab("")+
+  ylab("Price")+
+  scale_y_log10(labels=comma)
+
+# Size per Sq Ft
+data%>%
+  ggplot(aes(y=size_in_sqft, fill="red"))+
+  geom_boxplot()+
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=11),
+    axis.title.x=element_blank(),
+    axis.text.x=element_blank(),
+    axis.ticks.x=element_blank()
+  ) +
+  ggtitle("A boxplot of Size in Sq Ft") +
+  xlab("")+
+  ylab("Size in Sq Ft")+
+  scale_y_log10()
+
+# Price Per Sq Ft
+data%>%
+  ggplot(aes(y=price_per_sqft, fill="yellow"))+
+  geom_boxplot()+
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=11),
+    axis.title.x=element_blank(),
+    axis.text.x=element_blank(),
+    axis.ticks.x=element_blank()
+  ) +
+  ggtitle("A boxplot of Price per Sq Ft") +
+  xlab("")+
+  ylab("Price per Sq Ft")+
+  scale_y_log10(labels = comma)
+
+# Bathrooms
+data%>%
+  ggplot(aes(x=factor(no_of_bathrooms), y=price, fill=no_of_bathrooms)) +
+  geom_boxplot() +
+  scale_fill_viridis(alpha=0.6) +
+  geom_jitter(color="black", size=0.4, alpha=0.9) +
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=11)
+  ) +
+  ggtitle("A boxplot of Price by the Number of Bathrooms") +
+  xlab("Number of Bathrooms")+
+  ylab("Price")+
+  scale_y_log10(labels = comma)
+
+
+# Bedrooms
+data%>%
+  ggplot(aes(x=factor(no_of_bedrooms), y=price, fill=no_of_bedrooms)) +
+  geom_boxplot() +
+  scale_fill_viridis(alpha=0.6) +
+  geom_jitter(color="black", size=0.4, alpha=0.9) +
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=11)
+  ) +
+  ggtitle("A boxplot of Price by the Number of Bedrooms") +
+  xlab("Number of Bedrooms")+
+  ylab("Price")+
+  scale_y_log10(labels = comma)
+```
+
+From the Boxplots:
+
+Price and the Price per Sq Ft appear to have a symmetrical distribution with their median value appearing at the middle of the box. Size in Sq Ft appears to have a negatively skewed distribution with the median value at the upper half of the box. The common thing as seen with these boxplots is that there is also potentially presence of outliers as there exists datapoints outside the box on the tails.
+
+On the plot of Price by the number of bathrooms; apartments with 1, 2, 4 and 6 bathrooms their price distribution is negatively skewed; apartments with 3 and 5 bathrooms their price distribution is positively skewed.
+
+On the plot of Price by the number of bedrooms; apartments with 0 and 4 bedrooms their price distribution is positively skewed; apartments with 3 and 5 bedrooms their price distribution is negatively skewed; 1 and 2 bedroom apartments have a symmetrical price distribution. 
+
+
+
+#### **Question-9: Pickup 5 most important numerical columns, including target variable from your dataset and get a scatter plot matrix. Which ones are correlated with the target variable?** 
+
+In my dataset the relevant numerical variables are:  
+`r colnames(data[ , c(5:9)])`
+
+The scatter plot matrix is below:
+
+```{r scattrplotmatrix, echo = FALSE}
+
+ggpairs(data[ , c(5:9)], title="Scatterplot Matrix")
+```
+
+From the Scatterplot; the target variable is Price and it appears it has a strong correlation with all the other numeric variables.
+
+
+#### **Question-10: By looking at the correlations observed from the scatter plot matrix, can you propose some predictors for your target variable? ** 
+
+Here I will propose that all the numeric variables to be used as predictors of price. The correlations between the Price and the numeric variables used is above 0.5 suggesting that there exist a strong relationship.
+
+```{r correlations, echo = FALSE}
+
+cor(data[ , c(5:9)])
+
+```
+
+
+#### **Question-11: Pickup 4 pairs of numerical and categorical variables (if you have), from your dataset and get a box plot for each pair. Categorical variable in the x-axis, and numerical variable in the y-axis. Which pairs are correlated?** 
+
+The categorical columns I selected are `r colnames(data[ , c(8,9,10,37)])`   
+The boxplots are below:
+
+```{r boxplots, echo = FALSE}
+
+# Bathrooms
+data%>%
+  ggplot(aes(x=factor(no_of_bathrooms), y=price, fill=no_of_bathrooms)) +
+  geom_boxplot() +
+  scale_fill_viridis(alpha=0.6) +
+  geom_jitter(color="black", size=0.4, alpha=0.9) +
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=11)
+  ) +
+  ggtitle("A boxplot of Price by the Number of Bathrooms") +
+  xlab("Number of Bathrooms")+
+  ylab("Price")+
+  scale_y_log10(labels = comma)
+
+
+# Bedrooms
+data%>%
+  ggplot(aes(x=factor(no_of_bedrooms), y=price, fill=no_of_bedrooms)) +
+  geom_boxplot() +
+  scale_fill_viridis(alpha=0.6) +
+  geom_jitter(color="black", size=0.4, alpha=0.9) +
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=11)
+  ) +
+  ggtitle("A boxplot of Price by the Number of Bedrooms") +
+  xlab("Number of Bedrooms")+
+  ylab("Price")+
+  scale_y_log10(labels = comma)
+
+# quality
+data%>%
+  ggplot(aes(x=factor(quality), y=price, fill=quality)) +
+  geom_boxplot() +
+  geom_jitter(color="black", size=0.4, alpha=0.9) +
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=11)
+  ) +
+  ggtitle("A boxplot of Price by the Quality") +
+  xlab("Quality")+
+  ylab("Price")+
+  scale_y_log10(labels = comma)
+
+
+# view of water
+data%>%
+  ggplot(aes(x=factor(view_of_water), y=price, fill=view_of_water)) +
+  geom_boxplot() +
+  geom_jitter(color="black", size=0.4, alpha=0.9) +
+  theme_ipsum() +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=11)
+  ) +
+  ggtitle("A boxplot of Price by the View of Water") +
+  xlab("Is there a View of Water?")+
+  ylab("Price")+
+  scale_y_log10(labels = comma)
+```
+
+#### **Question-12: By looking at the boxplots, can you propose some categorical predictors for your target variable? ** 
+
+It is not clear which categorical variables are ordinal in the dataset. Even if we know this, it is not clear the order of the categories. The only exception is the quality variable where there are levels applied to the apartments. It appears that the ultra quality apartments have a shorter spread in prices. Apartments with higher number of bathrooms and bedrooms fetch higher prices. The water view attracts higher prices, however the spread in prices suggests that there could also be apartments with no water view but with high prices. 
+
+I can propose, number of bathrooms, number of bedrooms and the water view as the categorical predictors.
+
+
+
+
+

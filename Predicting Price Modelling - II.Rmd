@@ -1,0 +1,191 @@
+---
+title: "Price prediction"
+output:
+  html_document:
+    df_print: paged
+date: "2022-12-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading packages
+```{r}
+library(psych)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(stargazer)
+library(MASS)
+library(caret)
+```
+
+
+## Data importation
+
+```{r}
+mydata <- read.csv("C:/Users/dhshe/OneDrive/Desktop/eda/eda/properties_data.csv")
+head(mydata)
+attach(mydata)
+```
+
+# Data cleaning
+
+## Checking for mising values
+```{r}
+sum(is.na(mydata))
+```
+## Checking for outliers
+
+```{r}
+ggplot(mydata,
+aes(x = price)) +
+geom_boxplot() +
+labs(title = "Apartments price")
+```
+
+
+## Removing outliers
+
+```{r}
+#find Q1, Q3, and interquartile range for values in column A
+Q1 <- quantile(mydata$price, .25)
+Q3 <- quantile(mydata$price, .75)
+IQR <- IQR(mydata$price)
+
+#only keep rows in dataframe that have values within 1.5*IQR of Q1 and Q3
+data <- subset(mydata, mydata$price> (Q1 - 1.5*IQR) & mydata$price< (Q3 + 1.5*IQR))
+attach(data)
+```
+
+
+# Summary statistics
+
+## Selecting numeric variables alone
+```{r}
+df<-data.frame(price, size_in_sqft, price_per_sqft, no_of_bedrooms, no_of_bathrooms)
+```
+
+## Summarize numeric variables
+```{r}
+describe(df)
+```
+
+## Histogram of price
+
+```{r}
+ggplot(data,
+       aes(x = price)) +
+    geom_histogram(bins=50, fill="blue") +
+    labs(title = "Histogram showing apartments price")
+```
+
+## Price by quality of the apartments
+```{r}
+ggplot(data,
+aes(x = quality,
+y = price)) +
+geom_boxplot() +
+labs(title = "Price by quality of the apartments")
+```
+## Scatter plots
+```{r}
+library(GGally)
+ggpairs(df)
+```
+
+## Histogram of the apartments size in sqft
+```{r}
+ggplot(data, aes(x = size_in_sqft)) +
+geom_histogram(fill = "cornflowerblue",
+color = "white") +
+labs(title = "Size of the apartment histogram")
+```
+## Histogram showing distribution of price per sqft
+```{r}
+ggplot(data, aes(x = price_per_sqft)) +
+geom_histogram(fill = "cornflowerblue",
+color = "white") +
+labs(title = "Price per sqft histogram")
+```
+## Bar chart showing the distribution of apartments based on quality
+```{r}
+ggplot(data, aes(x=quality))+geom_bar(fill="blue")+
+  labs(title="Quality of apartments")
+```
+
+## Creating training and validation set
+
+```{r}
+set.seed(23)
+trainindex<-createDataPartition(data$price, p =.70, list = FALSE)
+train<-data[trainindex,]
+validation <- data[-trainindex,]
+```
+
+
+
+## Modeling
+
+## Stepwise regression
+```{r}
+#define intercept-only model
+intercept_only <- lm(price ~ 1, data=train)
+
+#define model with all predictors
+all <- lm(price ~ ., data=train)
+
+#perform backward stepwise regression
+backward <- step(all, direction='backward', scope=formula(all), trace=0)
+
+# intercept
+backward$coefficients
+```
+
+## Linear model picking up variables selected by stepwise model
+```{r}
+model1<-lm(price~size_in_sqft+price_per_sqft+no_of_bedrooms+covered_parking+kitchen_appliances+lobby_in_building+networked+private_garden+shared_spa+view_of_landmark, data=train)
+```
+
+```{r}
+summary(model1)
+```
+## find optimal lambda for Box-Cox transformation 
+
+```{r}
+bc <- boxcox(price~size_in_sqft+price_per_sqft+no_of_bedrooms+covered_parking+kitchen_appliances+lobby_in_building+networked+private_garden+shared_spa+view_of_landmark, data=train)
+(lambda <- bc$x[which.max(bc$y)])
+```
+
+
+#fit new linear regression model using the Box-Cox transformation
+
+```{r}
+new_model <- lm(((price^lambda-1)/lambda) ~ size_in_sqft+price_per_sqft+no_of_bedrooms+covered_parking+kitchen_appliances+lobby_in_building+networked+private_garden+shared_spa+view_of_landmark, data=train)
+```
+
+# Summary of the new model
+
+```{r}
+summary(new_model)
+```
+
+## Prediction and checking accuracy of the model
+```{r}
+prediction1<-predict(model1, validation)
+prediction2<-predict(new_model, validation)
+
+# Converting prediction two back to normal number
+prediction3<-(1+lambda*prediction2)^(1/lambda)
+
+attach(validation)
+data1<-cbind(price, prediction1, prediction3)
+head(data1)
+
+# Calculating RSME to determine the better model
+RSME_MODEL1<-sqrt(sum((price-prediction1)^2/532))
+RSME_MODEl2<-sqrt(sum((price-prediction3)^2/532))
+data.frame(RSME_MODEL1, RSME_MODEl2)
+```
+

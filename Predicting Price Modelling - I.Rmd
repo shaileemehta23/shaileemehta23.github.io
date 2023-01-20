@@ -1,0 +1,559 @@
+---
+title: "Predicting Prices of Dubai Apartments"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = F,
+                      message = F)
+```
+
+### Preliminaries
+
+```{r Packages, include=FALSE}
+require(tidyverse); require(stargazer); require(rpart)
+require(rpart.plot); require(ROCR); require(gbm)
+require(caTools); require(MASS); require(randomForest)
+```
+
+
+```{r Importing Dataset}
+## Importing Data
+dfProperties = read.csv("properties_data.csv", stringsAsFactors = F)
+
+#glimpse(dfProperties)
+```
+
+```{r Cleaning the Dataset}
+## Cleaning Data
+data = dfProperties%>%
+  mutate_all(funs(str_replace(., "True", "1")))%>%
+  mutate_all(funs(str_replace(., "False", "0")))%>%
+  mutate_if(is.character, as.factor)%>%
+  mutate_at(c('latitude', 'longitude', "price", 
+              "size_in_sqft", "price_per_sqft"), as.numeric)%>%
+  na.omit()
+
+## Defining a dummy variable for high value apartments as house value above the median price
+medprice = median(data$price)
+data$highvalue = ifelse(data$price > medprice, 1, 0)
+
+data = data%>%
+  dplyr::select(-id, -longitude, -latitude, -price)
+```
+
+
+### Feature Selection
+
+```{r fig.height=10, fig.width=8}
+## Specify Models
+mdlA = highvalue ~ . - neighborhood
+
+## Using Random Forests to select the most important features
+numA = length(colnames(data))
+rftry = round(sqrt(numA))
+rfTrees = 1000
+Forest = randomForest(mdlA, data = data,
+                          ntree = rfTrees, mtry = rftry,
+                          importance = T)
+
+var.imp = importance(Forest, type = 1)
+var.imp = data.frame(predictors = rownames(var.imp), var.imp)
+
+# Order the predictor levels by importance
+var.imp.sort <- arrange(var.imp,desc(X.IncMSE))
+# Select the top 10 predictors
+var.imp.10<- var.imp.sort[1:10,]
+print(var.imp.10)
+
+# Plot Important Variables
+varImpPlot(Forest, type=1)
+```
+
+
+```{r}
+rownames(var.imp.10)
+## Subsetting data with relevant important variables
+data2 = data%>%
+  dplyr::select(highvalue, price_per_sqft, size_in_sqft, no_of_bedrooms,
+                no_of_bathrooms, unfurnished, quality, view_of_water,
+                maid_room, shared_pool, balcony)
+```
+
+### Training the Models
+
+```{r}
+## Specify models
+mdlA.n = highvalue ~ .
+mdlA.f = factor(highvalue, levels = c(0,1)) ~ .
+```
+
+```{r}
+## Logistic Regression
+rsltLog = glm(mdlA.n, data = data2,
+              family = binomial(link = "logit"))
+
+## OLS
+rsltReg = lm(mdlA.n, data = data2)
+
+## Regression Trees 
+rsltTree = rpart(mdlA.n, data = data2 , 
+                 method ="class",
+                 parms = list ( split = "information"))
+
+## Random Forest
+frsTrees = 500
+frsTrms = length(colnames(data2))
+frsTryA = round(sqrt(frsTrms))
+rsltFrst = randomForest(mdlA.f, 
+                        data = data2,
+                        ntrees = frsTrees, 
+                        mtry = frsTryA, 
+                        importance = T)
+
+## Gradient Boost Machines
+gbmTrees = 500
+rsltGbm = gbm(mdlA.n, data = data2,
+              distribution = "bernoulli", 
+              n.trees = gbmTrees,
+              interaction.depth = 2, 
+              shrinkage = 0.01,
+              bag.fraction = 0.5, 
+              n.minobsinnode = 10)
+```
+
+### Presenting Estimation Results
+
+```{r, results='asis', fig.align='center'}
+stargazer(rsltReg, rsltLog,
+          summary = F, intercept.bottom = F,
+          align = T, no.space = T,
+          type = "html")
+```
+
+```{r fig.height=10, fig.width=14, fig.align='center'}
+print(rsltTree)
+rpart.plot(rsltTree)
+```
+
+### Predict Classification probabilities
+
+```{r}
+## Observed Values
+yvalue = data2$highvalue
+
+## Find predicted class probabilities
+probLog = predict(rsltLog, type = "response")
+probReg = predict(rsltReg)
+probTree = predict(rsltTree, method = "prob")[, 2]
+probFrst = predict(rsltFrst, type = "prob")[, 2]
+probGbm = predict(rsltGbm, type = "response", 
+                  n.trees = gbmTrees)
+```
+
+### Classification Performance
+
+```{r}
+# Make a function classificationPerf
+classificationPerf <- function (f, y, tau = 0.5) {
+  # f : classification probability
+  # y : observed value ( binary )
+  # tau: threshold (0.5 by default )
+  # Convert classification probabilities to class
+  # predictions based on the specified threshold tau
+  f <- as.numeric (f > tau)
+  # Define observed and predicted classification variables
+  # as factors . Data type factor is applied in order to
+  # prevent errors when predicted classes are all of one
+  # kind
+  y <- factor (y, levels = c(0 ,1))
+  f <- factor (f, levels = c(0 ,1))
+  # Make a classification table
+  tbl <- table ( Predicted = f, Observed = y)
+  # Identify classifications
+  TN <- tbl [1 ,1]
+  FN <- tbl [1 ,2]
+  FP <- tbl [2 ,1]
+  TP <- tbl [2 ,2]
+  # Measure performance
+  perf <- c(
+    Accuracy = (TP+TN)/sum(tbl),
+    Sensitivity = TP /( TP + FN),
+    Specificity = TN /( FP + TN),
+    Precision = TP /( FP + TP)
+  )
+  # return the outcome
+  return ( perf )
+}
+
+# Combine classification performance of the three models
+prf <- data.frame (Log = classificationPerf(probLog, yvalue),
+                   Reg = classificationPerf(probReg, yvalue),
+                   Tree = classificationPerf(probTree , yvalue),
+                   Frst = classificationPerf(probFrst , yvalue),
+                   Gbm = classificationPerf(probGbm , yvalue))
+
+round(prf, 3)
+```
+
+### Receiver Operating Characteristics (ROC) curves
+
+```{r fig.height=6, fig.width=8, fig.align='center'}
+## observed Target Value
+yvalue = data2$highvalue
+
+## Make Predictions from the Models
+probLog = predict(rsltLog, type = "response")
+probReg = predict(rsltReg)
+probTree = predict(rsltTree, method = "prob")[, 2]
+probFrst = predict(rsltFrst, type = "prob")[, 2]
+probGbm = predict(rsltGbm, type = "response", 
+                  n.trees = gbmTrees)
+
+## Predictive Summaries
+pred.Log = prediction(probLog, yvalue)
+pred.Reg = prediction(probReg, yvalue)
+pred.Tree = prediction(probTree, yvalue)
+pred.Frst = prediction(probFrst, yvalue)
+pred.Gbm = prediction(probGbm, yvalue)
+
+## Performance Function in ROCR to prepare for the desired plot
+perf.Log = performance(pred.Log, measure = "tpr",
+                       x.measure = "fpr")
+perf.Reg = performance(pred.Reg, measure = "tpr",
+                       x.measure = "fpr")
+perf.Tree = performance(pred.Tree, measure = "tpr",
+                       x.measure = "fpr")
+perf.Frst = performance(pred.Frst, measure = "tpr",
+                       x.measure = "fpr")
+perf.Gbm = performance(pred.Gbm, measure = "tpr",
+                       x.measure = "fpr")
+
+## Plotting
+plot(perf.Log, lty = 1, lwd = 2, col = "red")
+plot(perf.Reg, lty = 1, lwd = 2, col = "blue", add = T)
+plot(perf.Tree, lty = 1, lwd = 2, col = "darkgreen", add = T)
+plot(perf.Frst, lty = 1, lwd = 2, col = "purple", add = T)
+plot(perf.Gbm, lty = 1, lwd = 2, col = "orange", add = T)
+
+abline(a = 0, b = 1, lty = 3, lwd = 1.5)
+legend(x = 0.6, y = 0.4,
+       c("Logit Regression",
+         "Linear Regression",
+         "Classification Tree",
+         "Random Forest",
+         "Gradient Boosting"),
+       col = c("red", "blue", "darkgreen", "purple", "orange"),
+       lwd = 3)
+
+dev.off()
+```
+
+```{r}
+round(rbind(aucLog = performance(pred.Log, "auc")@y.values[[1]],
+            aucReg = performance(pred.Reg, "auc")@y.values[[1]],
+            aucTree = performance(pred.Tree, "auc")@y.values[[1]],
+            aucFrst = performance(pred.Frst, "auc")@y.values[[1]],
+            aucGbm = performance(pred.Gbm, "auc")@y.values[[1]]),
+      3)
+```
+
+### Validation
+
+```{r}
+## Splitting the dataset
+set.seed(1234)
+
+#use 70% of dataset as training set and 30% as test set
+sample <- sample.split(data2$price, SplitRatio = 0.7)
+data.train  <- subset(data2, sample == TRUE)
+data.test   <- subset(data2, sample == FALSE)
+```
+
+#### Estimate the models on the training data
+
+```{r}
+rsltLog.Train = glm(mdlA.n, data = data.train,
+                    family = binomial(link = "logit"))
+
+rsltReg.Train = lm(mdlA.n, data = data.train)
+
+rsltTree.Train = lm(mdlA.n, data = data.train,
+                    method = "class",
+                    parms = list(split = "information"))
+
+rsltFrst.Train = randomForest(mdlA.f, data = data.train,
+                              ntrees = frsTrees,
+                              mtry = frsTryA)
+
+rsltGbm.Train = gbm(mdlA.n, data = data.train,
+                    distribution = "bernoulli",
+                    n.trees = gbmTrees,
+                    interaction.depth = 2,
+                    shrinkage = 0.01,
+                    bag.fraction = 0.5,
+                    n.minobsinnode = 10)
+```
+
+#### Predicted values for the test and make the ROC curves
+
+```{r fig.height=6, fig.width=8, fig.align='center'}
+## observed value from the test sample
+yvalue.Test = data.test$highvalue
+
+## Make test set predictions 
+probLog.Test = predict(rsltLog.Train, data.test, 
+                       type = "response")
+probReg.Test = predict(rsltReg.Train, data.test)
+probTree.Test = predict(rsltTree.Train, data.test, method = "prob")
+probFrst.Test = predict(rsltFrst.Train, data.test, 
+                        type = "prob")[, 2]
+probGbm.Test = predict(rsltGbm.Train, data.test, 
+                       type = "response", n.trees = gbmTrees)
+
+## Predictive Summaries
+pred.Log.Test = prediction(probLog.Test, yvalue.Test)
+pred.Reg.Test = prediction(probReg.Test, yvalue.Test)
+pred.Tree.Test = prediction(probTree.Test, yvalue.Test)
+pred.Frst.Test = prediction(probFrst.Test, yvalue.Test)
+pred.Gbm.Test = prediction(probGbm.Test, yvalue.Test)
+
+## Performance Function in ROCR to prepare for the desired plot
+perf.Log.Test = performance(pred.Log.Test, measure = "tpr",
+                       x.measure = "fpr")
+perf.Reg.Test = performance(pred.Reg.Test, measure = "tpr",
+                       x.measure = "fpr")
+perf.Tree.Test = performance(pred.Tree.Test, measure = "tpr",
+                       x.measure = "fpr")
+perf.Frst.Test = performance(pred.Frst.Test, measure = "tpr",
+                       x.measure = "fpr")
+perf.Gbm.Test = performance(pred.Gbm.Test, measure = "tpr",
+                       x.measure = "fpr")
+
+## Plotting
+plot(perf.Log.Test, lty = 1, lwd = 2, col = "red")
+plot(perf.Reg.Test, lty = 1, lwd = 2, col = "blue", add = T)
+plot(perf.Tree.Test, lty = 1, lwd = 2, col = "darkgreen", add = T)
+plot(perf.Frst.Test, lty = 1, lwd = 2, col = "purple", add = T)
+plot(perf.Gbm.Test, lty = 1, lwd = 2, col = "orange", add = T)
+
+abline(a = 0, b = 1, lty = 3, lwd = 1.5)
+legend(x = 0.6, y = 0.4,
+       c("Logit Regression",
+         "Linear Regression",
+         "Classification Tree",
+         "Random Forest",
+         "Gradient Boosting"),
+       col = c("red", "blue", "darkgreen", "purple", "orange"),
+       lwd = 3)
+dev.off()
+```
+
+```{r}
+round(rbind(aucLog = performance(pred.Log.Test, "auc")@y.values[[1]],
+            aucReg = performance(pred.Reg.Test, "auc")@y.values[[1]],
+            aucTree = performance(pred.Tree.Test, "auc")@y.values[[1]],
+            aucFrst = performance(pred.Frst.Test, "auc")@y.values[[1]],
+            aucGbm = performance(pred.Gbm.Test, "auc")@y.values[[1]]),
+      3)
+```
+
+### K-Fold Cross Validation
+
+```{r}
+# Training and test sets are repeatedly selected and
+# analyzed . The number of repetitions is called folds .
+# Number of folds for cross validation
+nFolds = 5
+
+# Randomly assign a fold-id to each observation
+iFolds <- cut(sample(1: nrow(data2)), nFolds,
+              labels = FALSE )
+table(iFolds)
+```
+
+```{r}
+# Make empty list to store the results . The list will be
+# used to capture predicted and observed values of all
+# model predictions
+rsltAll <- list()
+
+# Start a loop over the folds
+for(fold in 1: nFolds){
+  # Issue message about current fold
+  cat ("Current fold : ", fold , "\n")
+  # Select the training and test sets
+  data.Train <- data2[iFolds != fold, ]
+  data.Test <- data2[ iFolds == fold, ]
+  # Train the models
+  rsltLog <- glm ( mdlA.n, data = data.Train ,
+                   binomial(link = "logit"))
+  rsltReg <- lm(mdlA.n, data = data.Train)
+  rsltTree <- rpart(mdlA.n, data = data.Train,
+                    method ="class",
+                    parms = list(split = "information"))
+  rsltFrst <- randomForest( mdlA.f, data = data.Train,
+                            ntree = frsTrees , mtry = frsTryA)
+  rsltGbm <- gbm (mdlA.n, data = data.Train,
+                  distribution ="bernoulli",
+                  n.trees = gbmTrees,
+                  interaction.depth =2,
+                  shrinkage = 0.01,
+                  bag.fraction = 0.5 , n.minobsinnode = 10)
+  # Find observed target values for the test set
+  yvalue.Test = data.Test$highvalue
+  
+  # Find Predictions test set
+  probLog.Test = predict(rsltLog, data.Test, 
+                       type = "response")
+  probReg.Test = predict(rsltReg, data.Test)
+  probTree.Test = predict(rsltTree, data.Test, method = "prob")[, 2]
+  probFrst.Test = predict(rsltFrst, data.Test, 
+                        type = "prob")[, 2]
+  probGbm.Test = predict(rsltGbm, data.Test, 
+                       type = "response", n.trees = gbmTrees)
+  
+  # Store Results
+  rsltAll$Log$predictions[[fold]] = unname(probLog.Test)
+  rsltAll$Log$observed[[fold]] = yvalue.Test
+  
+   rsltAll$Reg$predictions[[fold]] = unname(probReg.Test)
+   rsltAll$Reg$observed[[fold]] = yvalue.Test
+   
+   rsltAll$Tree$predictions[[fold]] = unname(probTree.Test)
+   rsltAll$Tree$observed[[fold]] = yvalue.Test
+   
+   rsltAll$Frst$predictions[[fold]] = unname(probFrst.Test)
+   rsltAll$Frst$observed[[fold]] = yvalue.Test
+   
+   rsltAll$Gbm$predictions[[fold]] = unname(probGbm.Test)
+   rsltAll$Gbm$observed[[fold]] = yvalue.Test
+}
+
+# Check Contents
+str(rsltAll)
+```
+
+```{r}
+# Retrieve predicted values and observed values 
+probLog = rsltAll$Log$predictions
+yvalLog = rsltAll$Log$observed
+
+probReg = rsltAll$Reg$predictions
+yvalReg = rsltAll$Reg$observed
+
+probTree = rsltAll$Tree$predictions
+yvalTree = rsltAll$Tree$observed
+
+probFrst = rsltAll$Frst$predictions
+yvalFrst = rsltAll$Frst$observed
+
+probGbm = rsltAll$Gbm$predictions
+yvalGbm = rsltAll$Gbm$observed
+
+# Determine Prediction and performance for ROC
+pred.Log = prediction(probLog, yvalLog)
+perf.Log = performance(pred.Log, "tpr", "fpr")
+
+pred.Reg = prediction(probReg, yvalReg)
+perf.Reg = performance(pred.Reg, "tpr", "fpr")
+
+pred.Tree = prediction(probTree, yvalTree)
+perf.Tree = performance(pred.Tree, "tpr", "fpr")
+
+pred.Frst = prediction(probFrst, yvalFrst)
+perf.Frst = performance(pred.Frst, "tpr", "fpr")
+
+pred.Gbm = prediction(probGbm, yvalGbm)
+perf.Gbm = performance(pred.Gbm, "tpr", "fpr")
+```
+
+```{r fig.height=6, fig.width=8, fig.align='center'}
+## Make Plots
+# Include results for the folds
+plot(perf.Log, lty =2, lwd =1.0, col="red")
+plot(perf.Reg, lty =2, lwd =1.0, col="blue", add = TRUE)
+plot(perf.Tree, lty =2, lwd =1.0, col="darkgreen", add = TRUE)
+plot(perf.Frst, lty =2, lwd =1.0, col="purple", add = TRUE)
+plot(perf.Gbm, lty =2, lwd =1.0, col="orange", add = TRUE)
+
+#Include average of the folds
+plot(perf.Log, avg= "threshold", lty =1, lwd =2.0 , col="red", add = TRUE)
+plot(perf.Reg, avg= "threshold", lty =1, lwd =2.0, col="blue", add = TRUE)
+plot(perf.Tree, avg= "threshold", lty =1, lwd =2.0 , col="darkgreen", add = TRUE)
+plot(perf.Frst, avg= "threshold", lty =1, lwd =2.0 , col="purple", add = TRUE)
+plot(perf.Gbm , avg= " threshold ", lty =1, lwd =2.0 , col="orange", add = TRUE)
+
+#mtext(paste0(nFolds ,"- folds cross validation") , side = 3)
+abline(a=0, b=1, lty =3, lwd =1.5)
+legend(0.6 ,0.4, c("Logit regression",
+                   "Linear regression",
+                   "Classification tree",
+                   "Random forest",
+                   "Gradient boosting"),
+       col = c("red", "blue", "darkgreen", "purple", "orange"),
+       lwd = 3)
+dev.off ()
+```
+
+```{r}
+# AUC measures
+auc.Log <- do.call(rbind, performance(pred.Log, "auc")@y.values)
+auc.Reg <- do.call(rbind, performance(pred.Reg, "auc")@y.values)
+auc.Tree <- do.call(rbind, performance(pred.Tree, "auc")@y.values)
+auc.Frst <- do.call(rbind, performance(pred.Frst, "auc")@y.values)
+auc.Gbm <- do.call(rbind, performance(pred.Gbm, "auc")@y.values)
+auc.All <- data.frame(auc.Log, auc.Reg, auc.Tree, auc.Frst , auc.Gbm)
+round(auc.All, 3)
+```
+
+### Complexity Control
+
+```{r}
+rsltAll = data.frame()
+pctTrain = 0.7
+nTrials = 20
+
+# Loop over the settings of the control parameter
+for (gbmTrees in seq (20, 300, 20)){
+cat ("Number of trees :", gbmTrees, "\n")
+# Start loop over the trials
+for (i in 1: nTrials ) {
+# Randomly select pctTrain rows of data2 for the
+# training set. The remainder defines the test set
+nTrain <- ceiling (pctTrain * nrow ( data2 ))
+obsTrain <- sample (1: nrow ( data2 ), nTrain )
+data2.Train <- data2 [ obsTrain ,]
+data2.Test <- data2 [- obsTrain ,]
+# Train the models on the training set
+rsltGbm.Train <-gbm(mdlA.n , data = data2.Train , 
+                       distribution ="bernoulli",
+                       n.trees = gbmTrees,
+                       interaction.depth = 2,
+                    shrinkage = 0.01,
+                    bag.fraction = 0.5,
+                    n.minobsinnode = 10,
+                    )
+# Find target values for the training set and
+# the test set
+yvalue.Train <- data2.Train$highvalue
+yvalue.Test <- data2.Test$highvalue
+# Find predicted class probabilities for the
+# training set and the test set
+predGbm.Train <- predict(rsltGbm.Train , data2.Train ,
+                         type = "response", n.trees = gbmTrees)
+predGbm.Test <-predict ( rsltGbm.Train , data2.Test ,
+                          type = "response")
+# Collect results
+rsltAll <-
+rbind ( rsltAll ,
+data.frame (gbmTrees, i, sample ="Test", t(
+classificationPerf ( predGbm.Test , yvalue.Test , 0.5) )),
+data.frame(gbmTrees, i, sample ="Train",
+           t(classificationPerf ( predGbm.Train , yvalue.Train , 0.5) ))
+)
+}}
+```
+
+```{r}
